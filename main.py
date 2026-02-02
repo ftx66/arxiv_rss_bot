@@ -20,6 +20,7 @@ from datetime import datetime, timedelta  # 导入日期时间模块
 import uuid  # 导入UUID模块，用于生成唯一标识符
 import json  # 导入JSON模块，用于处理JSON数据
 import time  # 导入时间模块
+import yaml
 
 # 导入定时任务相关模块
 from apscheduler.schedulers.blocking import BlockingScheduler  # 阻塞式调度器
@@ -78,6 +79,41 @@ def setup_logging():
     logging.getLogger("feedgen").setLevel(logging.WARNING)
     
     return logging.getLogger("arXiv_RSS_Bot")  # 返回配置好的日志记录器
+
+def load_search_settings(path="search.yaml"):
+    try:
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                return yaml.safe_load(f) or {}
+        return {}
+    except Exception as e:
+        logger.warning(f"Failed to load search settings: {e}")
+        return {}
+
+def compute_fetch_params(config):
+    settings = load_search_settings()
+    max_days = config.get("max_days_old", 30)
+    if settings.get("start_date"):
+        try:
+            start_dt = datetime.strptime(settings["start_date"], "%Y-%m-%d")
+            delta_days = max(1, (datetime.now() - start_dt).days)
+            max_days = delta_days
+            logger.info(f"Using start_date override, days={max_days}")
+        except Exception as e:
+            logger.warning(f"Invalid start_date in search.yaml: {e}")
+    elif isinstance(settings.get("max_days_old"), int) and settings["max_days_old"] > 0:
+        max_days = settings["max_days_old"]
+        logger.info(f"Using max_days_old override: {max_days}")
+    if isinstance(settings.get("date_range"), dict):
+        config["date_range"] = settings["date_range"]
+        logger.info(f"Using date_range override: {settings['date_range']}")
+    config["max_days_old"] = max_days
+    categories_count = len(config.get("categories", ["cs.AI"]))
+    fetch_max = min(1000, max(100, max_days * categories_count * 15))
+    if isinstance(settings.get("max_results"), int) and settings["max_results"] > 0:
+        fetch_max = settings["max_results"]
+        logger.info(f"Using max_results override: {fetch_max}")
+    return max_days, fetch_max
 
 def save_history_record(config, processed_papers, output_file):
     """
@@ -185,11 +221,7 @@ def run_pipeline():
         logger.info(f"Loaded configuration with {len(config['keywords'])} keywords")  # 记录加载了多少关键词
         
         # 获取最新论文
-        # 增加日期范围获取更多论文
-        max_days = config.get('max_days_old', 30) 
-        # 设置获取数量为max_days * 每天平均论文数 * 类别数
-        categories_count = len(config.get('categories', ['cs.AI']))
-        fetch_max = min(1000, max(100, max_days * categories_count * 15))
+        max_days, fetch_max = compute_fetch_params(config)
         logger.info(f"Fetching up to {fetch_max} papers from the last {max_days} days")
         
         # 修改获取数量
@@ -307,11 +339,7 @@ def main():
         config = load_config()  # 加载配置
         
         # 步骤2：获取最新论文
-        # 增加日期范围获取更多论文
-        max_days = config.get('max_days_old', 30) 
-        # 设置获取数量为max_days * 每天平均论文数 * 类别数
-        categories_count = len(config.get('categories', ['cs.AI']))
-        fetch_max = min(1000, max(100, max_days * 10 * categories_count))
+        max_days, fetch_max = compute_fetch_params(config)
         logger.info(f"Fetching up to {fetch_max} papers from the last {max_days} days")
         
         # 修改获取数量
